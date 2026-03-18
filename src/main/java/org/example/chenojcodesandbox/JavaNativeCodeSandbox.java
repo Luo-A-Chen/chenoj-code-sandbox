@@ -1,10 +1,13 @@
 package org.example.chenojcodesandbox;
 
+import cn.hutool.core.date.StopWatch;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.io.resource.ResourceUtil;
+import cn.hutool.core.util.StrUtil;
 import org.example.chenojcodesandbox.model.ExecuteCodeRequest;
 import org.example.chenojcodesandbox.model.ExecuteCodeResponse;
 import org.example.chenojcodesandbox.model.ExecuteMessage;
+import org.example.chenojcodesandbox.model.JudgeInfo;
 import org.example.chenojcodesandbox.utils.ProcessUtils;
 
 import java.io.BufferedReader;
@@ -12,9 +15,11 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Java原生代码沙箱
@@ -30,7 +35,7 @@ public class JavaNativeCodeSandbox implements CodeSandbox {
         //1.构造一个代码沙县请求类
         ExecuteCodeRequest executeCodeRequest = new ExecuteCodeRequest();
         //2.读取题目输入用例（这里先测试写死）
-        executeCodeRequest.setInputList(Arrays.asList("1 2","3 4"));
+        executeCodeRequest.setInputList(Arrays.asList("1 2", "1 3"));
         //3.读取用户写入代码
         String code = ResourceUtil.readStr("testCode/simpleComputeArgs/Main.java", StandardCharsets.UTF_8);
         executeCodeRequest.setCode(code);
@@ -41,6 +46,13 @@ public class JavaNativeCodeSandbox implements CodeSandbox {
     }
 
 
+    /**
+     * 核心思路就是用程序代替人工进行命令行编译
+     * Process类是java程序运行时JVM创建的进程对象
+     *
+     * @param request
+     * @return
+     */
     @Override
     public ExecuteCodeResponse executeCode(ExecuteCodeRequest request) {
         // 1.题目输入用例列表+提交的代码+编程语言
@@ -48,65 +60,99 @@ public class JavaNativeCodeSandbox implements CodeSandbox {
         String code=request.getCode();
         String language=request.getLanguage();
 
-        //用户的代码保存成文件
+        //2.用户的代码保存成文件
+        //2.1获取到当前用户工作的一个根目录
         String userDir = System.getProperty("user.dir");
+        //2.2根目录+下划线+代码保存文件
         String globalCodePathName=userDir+ File.separator+GLOBAL_CODE_DIR_NAME;
-        //判断全局代码目录是否存在，没有则新建
+        //2.3判断文件是否存在，没有则新建
         if(!FileUtil.exist(globalCodePathName)){
             FileUtil.mkdir(globalCodePathName);
         }
-        //把用户的代码隔离存放,保存为文件
+        //2.4把用户的代码隔离存放,保存为文件
+        //2.5保存父文件=代码文件夹+下划线+随机文件名
         String userCodeParentPath=globalCodePathName+File.separator+ UUID.randomUUID();
+        //2.6父文件下的文件路径
         String userCodePath=userCodeParentPath+File.separator+GLOBAL_JAVA_CLASS_NAME;
+        //2.7真正处理的文件
         File userCodeFile=FileUtil.writeString(code,userCodePath,StandardCharsets.UTF_8);
 
-        //2.编译代码，得到class文件
-        //调用cmd命令去运行代码文件
-        String compileCmd =String.format("javac -encoding utf-8 -d %s %s", userCodeParentPath, userCodeFile.getAbsolutePath());
+        //3.编译代码，得到class文件
+        String compileCmd = String.format("javac -encoding utf-8 %s", userCodeFile.getAbsolutePath());
         try {
             Process compileProcess =Runtime.getRuntime().exec(compileCmd);
-            int exitState=compileProcess.waitFor();
-            if (exitState== 0) {
-                //分批获取正常进程的信息
-                System.out.println("编译成功");
-                BufferedReader bufferReader = new BufferedReader(new InputStreamReader(compileProcess.getInputStream()));
-                StringBuilder stringBuilder = new StringBuilder();
-                String compileOutputLine;
-                while((compileOutputLine=bufferReader.readLine())!=null){
-                    stringBuilder.append(compileOutputLine);
-                }
-                System.out.println("编译信息: " + stringBuilder);
-            }else{
-                System.out.println("编译失败");
-                BufferedReader errorBufferReader = new BufferedReader(new InputStreamReader(compileProcess.getErrorStream()));
-                StringBuilder errorStringBuilder = new StringBuilder();
-                String errorCompileOutputLine;
-                while ((errorCompileOutputLine = errorBufferReader.readLine()) != null) {
-                    errorStringBuilder.append(errorCompileOutputLine);
-                }
-                System.out.println("编译错误信息: " + errorStringBuilder);
-            }
+            ExecuteMessage executeMessage = ProcessUtils.runProcessAndGetMessage(compileProcess, "编译");
+            System.out.println(executeMessage);
         } catch (Exception e) {
-            throw new RuntimeException("编译过程异常",e);
+            return getErrorResponse(e);
         }
 
-        //3.执行代码，得到输出结果
+        //4.执行代码，得到输出结果
+        List<ExecuteMessage> executeMessageList = new ArrayList<>();
         for (String inputArgs : inputList) {
             String runCmd = String.format("java -Dfile.encoding=UTF-8 -cp %s Main %s", userCodeParentPath, inputArgs);
             try {
                 Process runProcess = Runtime.getRuntime().exec(runCmd);
                 ExecuteMessage executeMessage = ProcessUtils.runProcessAndGetMessage(runProcess, "运行");
-                System.out.println("运行结果: " + executeMessage);
+                System.out.println(executeMessage);
+                executeMessageList.add(executeMessage);
             } catch (Exception e) {
-                throw new RuntimeException(e);
+                return getErrorResponse(e);
             }
         }
-        //4. 收集整理输出结果
+        //5. 收集整理输出结果
+        ExecuteCodeResponse executeCodeResponse = new ExecuteCodeResponse();
+        List<String> outputList = new ArrayList<>();
+        // 取用时最大值，便于判断是否超时
+        long maxTime = 0;
+        for (ExecuteMessage executeMessage : executeMessageList) {
+            String errorMessage = executeMessage.getErrorMessage();
+            if (StrUtil.isNotBlank(errorMessage)) {
+                executeCodeResponse.setMessage(errorMessage);
+                executeCodeResponse.setStatus(3);
+                break;
+            }
+            outputList.add(executeMessage.getMessage());
+            Long time = executeMessage.getTime();
+            if (time != null) {
+                maxTime = Math.max(maxTime, time);
+            }
+        }
+        //正常运行输出设置状态
+        if (outputList.size() == executeMessageList.size()) {
+            executeCodeResponse.setStatus(1);
+        }
+        executeCodeResponse.setOutputList(outputList);
+        JudgeInfo judgeInfo = new JudgeInfo();
+        //拿到最大执行时间
+        judgeInfo.setTime(maxTime);
+        //拿到程序执行内存todo
+        executeCodeResponse.setJudgeInfo(judgeInfo);
 
-        //5.文件清理，释放空间
+        //6.文件清理，释放空间
+        if (userCodeFile.getParentFile() != null) {
+            boolean del = FileUtil.del(userCodeFile.getParentFile());
+            System.out.println("删除" + (del ? "成功" : "失败"));
+        }
 
-        //6. 错误处理，提升程序健壮性
+        //7. 错误处理，提升程序健壮性
 
-        return null;
+        return executeCodeResponse;
+    }
+
+    /**
+     * 错误处理,获取错误响应
+     *
+     * @param e
+     * @return
+     */
+    private ExecuteCodeResponse getErrorResponse(Throwable e) {
+        ExecuteCodeResponse executeCodeResponse = new ExecuteCodeResponse();
+        executeCodeResponse.setOutputList(new ArrayList<>());
+        executeCodeResponse.setMessage(e.getMessage());
+        //这里执行的是代码沙箱的错误处理
+        executeCodeResponse.setStatus(2);
+        executeCodeResponse.setJudgeInfo(new JudgeInfo());
+        return executeCodeResponse;
     }
 }

@@ -1,53 +1,62 @@
 package org.example.chenojcodesandbox.utils;
 
+import cn.hutool.core.date.StopWatch;
 import org.example.chenojcodesandbox.model.ExecuteMessage;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 
+/**
+ * 进程工具类
+ */
 public class ProcessUtils {
 
     /**
-     * 进程工具类
      * 获取进程执行信息
      *
-     * @param runProcess
-     * @return
+     * @param runProcess opName运行类型
+     * @return ExecuteMessage
      */
     public static ExecuteMessage runProcessAndGetMessage(Process runProcess,String opName) {
         ExecuteMessage executeMessage = new ExecuteMessage();
         try {
-            // 1.等待程序执行，获取错误码
-            int exitValue = runProcess.waitFor();
-            if (exitValue == 0) {
-                System.out.println("编译成功");
-                //分批获取进程的正常输出
+            //检测时间
+            StopWatch stopWatch = new StopWatch();
+            stopWatch.start();
+
+            int exitState = runProcess.waitFor();
+            if (exitState == 0) {
+                System.out.println(opName + "成功");
+                //获取命令行输入（拿到进程对应的一个输入流，输入流里是写好对应的程序内容）
                 BufferedReader bufferReader = new BufferedReader(new InputStreamReader(runProcess.getInputStream()));
-                StringBuilder compileOutputStringBuilder = new StringBuilder();
+                StringBuilder stringBuilder = new StringBuilder();
+                String compileOutputLine;
                 //逐行读取输出
-                String compilOutputLine;
-                while ((compilOutputLine = bufferReader.readLine()) != null) {
-                    compileOutputStringBuilder.append(compilOutputLine);
+                while ((compileOutputLine = bufferReader.readLine()) != null) {
+                    stringBuilder.append(compileOutputLine);
                 }
-                executeMessage.setMessage(compileOutputStringBuilder.toString());
-                System.out.println("编译信息: " + compileOutputStringBuilder);
+                System.out.println("编译信息 " + stringBuilder);
             } else {
-                // 异常输出
-                System.out.println("编译失败.错误码: " + exitValue);
-
-                //错误信息进程输出
-                BufferedReader errorBufferReader = new BufferedReader(new InputStreamReader(runProcess.getErrorStream()));
-                StringBuilder errorCompileOutputStringBuilder = new StringBuilder();
-
-                //循环读取
-                String errorCompileOutputline;
-                while ((errorCompileOutputline = errorBufferReader.readLine()) != null) {
-                    errorCompileOutputStringBuilder.append(errorCompileOutputline);
+                System.out.println(opName + "失败，错误码：" + exitState);
+                BufferedReader bufferReader = new BufferedReader(new InputStreamReader(runProcess.getInputStream()));
+                //再把结果拼起来
+                StringBuilder stringBuilder = new StringBuilder();
+                String compileOutputLine;
+                while ((compileOutputLine = bufferReader.readLine()) != null) {
+                    stringBuilder.append(compileOutputLine);
                 }
-                executeMessage.setErrorMessage(errorCompileOutputStringBuilder.toString());
-                System.out.println("编译错误信息: " + errorCompileOutputStringBuilder);
+
+                BufferedReader errorBufferReader = new BufferedReader(new InputStreamReader(runProcess.getErrorStream()));
+                StringBuilder errorOutputStringBuilder = new StringBuilder();
+                String errorCompileOutputLine;
+                while ((errorCompileOutputLine = errorBufferReader.readLine()) != null) {
+                    errorOutputStringBuilder.append(errorCompileOutputLine);
+                }
+                executeMessage.setErrorMessage(errorOutputStringBuilder.toString());
             }
-            executeMessage.setExitValue(exitValue);
+            //结束时间
+            stopWatch.stop();
+            executeMessage.setTime(stopWatch.getLastTaskTimeMillis());
         } catch (Exception e) {
             e.printStackTrace();
         }
