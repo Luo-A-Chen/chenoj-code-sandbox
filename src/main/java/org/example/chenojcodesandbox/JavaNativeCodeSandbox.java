@@ -4,10 +4,13 @@ import cn.hutool.core.date.StopWatch;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.io.resource.ResourceUtil;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.dfa.FoundWord;
+import cn.hutool.dfa.WordTree;
 import org.example.chenojcodesandbox.model.ExecuteCodeRequest;
 import org.example.chenojcodesandbox.model.ExecuteCodeResponse;
 import org.example.chenojcodesandbox.model.ExecuteMessage;
 import org.example.chenojcodesandbox.model.JudgeInfo;
+import org.example.chenojcodesandbox.security.DefaultSecurityManager;
 import org.example.chenojcodesandbox.utils.ProcessUtils;
 
 import java.io.BufferedReader;
@@ -29,6 +32,20 @@ public class JavaNativeCodeSandbox implements CodeSandbox {
     private static final String GLOBAL_CODE_DIR_NAME = "tempCode";
     // 全局代码文件名,执行的代码只能运行在该目录下，减少读取用户输入的类名
     private static final String GLOBAL_JAVA_CLASS_NAME = "Main.java";
+    // 定义一个守护线程的超时时间
+    private static final long TIME_OUT = 10000L;
+    // 定义一个黑名单，用来限制用户输入的代码
+    private static final List<String> BLACK_LIST = Arrays.asList("java.io.File",
+            "java.io.FileOutputStream", "java.io.FileInputStream", "java.io.FileReader",
+            "java.io.FileWriter", "java.io.BufferedReader", "java.io.BufferedWriter",
+            "java.io.PrintWriter", "java.io.InputStream");
+    // 创建一个单词树，用来限制用户输入的代码(这里是一个hutool的工具类)
+    private static final WordTree wordTree = new WordTree();
+    static {
+        wordTree.addWords(BLACK_LIST);
+    }
+
+
 
     public static void main(String[] args) {
         JavaNativeCodeSandbox javaNativeCodeSandbox = new JavaNativeCodeSandbox();
@@ -55,10 +72,21 @@ public class JavaNativeCodeSandbox implements CodeSandbox {
      */
     @Override
     public ExecuteCodeResponse executeCode(ExecuteCodeRequest request) {
+        //引入java安全管理器
+        SecurityManager securityManager = new DefaultSecurityManager();
+        System.setSecurityManager(securityManager);
+
         // 1.题目输入用例列表+提交的代码+编程语言
         List<String> inputList =request.getInputList();
         String code=request.getCode();
         String language=request.getLanguage();
+
+        //进行代码黑名单检验，看是否违规
+        FoundWord foundWord = wordTree.matchWord(code);
+        if(foundWord!=null){
+            System.out.println("包含敏感词: "+foundWord.getFoundWord());
+            return null;
+        }
 
         //2.用户的代码保存成文件
         //2.1获取到当前用户工作的一个根目录
@@ -90,9 +118,19 @@ public class JavaNativeCodeSandbox implements CodeSandbox {
         //4.执行代码，得到输出结果
         List<ExecuteMessage> executeMessageList = new ArrayList<>();
         for (String inputArgs : inputList) {
-            String runCmd = String.format("java -Dfile.encoding=UTF-8 -cp %s Main %s", userCodeParentPath, inputArgs);
+            String runCmd = String.format("java -Xmx256m -Dfile.encoding=UTF-8 -cp %s Main %s", userCodeParentPath, inputArgs);
             try {
                 Process runProcess = Runtime.getRuntime().exec(runCmd);
+                //使用守护线程对用户线程运行时间进行一个监控
+                new Thread(() -> {
+                    try {
+                        //等待状态结束即为超时
+                        Thread.sleep(TIME_OUT);
+                        runProcess.destroy();
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                }).start();
                 ExecuteMessage executeMessage = ProcessUtils.runProcessAndGetMessage(runProcess, "运行");
                 System.out.println(executeMessage);
                 executeMessageList.add(executeMessage);
