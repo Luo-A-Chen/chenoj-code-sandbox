@@ -40,6 +40,20 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+<!--            java链接docker-->
+<!--        https://mvnrepository.com/artifact/com.github.docker-java/docker-java-->
+        <groupId>com.github.docker-java</groupId>
+        <artifactId>docker-java</artifactId>
+        <version>3.3.0</version>
+        </dependency>
+        <dependency>
+<!--            java链接docker-->
+<!--        https://mvnrepository.com/artifact/com.github.docker-java/docker-java-transport-http-->
+        <groupId>com.github.docker-java</groupId>
+        <artifactId>docker-java-transport-httpclient5</artifactId>
+        <version>3.3.0</version>
+        </dependency>
     </dependencies>
     <dependencyManagement>
         <dependencies>
