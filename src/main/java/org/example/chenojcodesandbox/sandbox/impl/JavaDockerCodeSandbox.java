@@ -35,10 +35,28 @@ import org.springframework.context.annotation.Primary;
 @Component
 @Primary
 public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements CodeSandbox{
-    // 定义一个守护线程的超时时间
     private static final long TIME_OUT = 10000L;
-    // 初始化容器
-    private static final Boolean FIRST_INIT=true;
+    private static final String IMAGE = "openjdk:8-alpine";
+
+    // 静态初始化块，类加载时只执行一次，确保镜像只拉取一次
+    static {
+        DockerClient dockerClient = DockerClientBuilder.getInstance().build();
+        PullImageResultCallback pullImageResultCallback = new PullImageResultCallback() {
+            @Override
+            public void onNext(PullResponseItem item) {
+                System.out.println("下载的镜像：" + item.getStatus());
+                super.onNext(item);
+            }
+        };
+        try {
+            dockerClient.pullImageCmd(IMAGE)
+                    .exec(pullImageResultCallback)
+                    .awaitCompletion();
+            System.out.println("镜像拉取完成");
+        } catch (InterruptedException e) {
+            throw new RuntimeException("镜像拉取失败", e);
+        }
+    }
 
     /**
      * 创建docker容器执行用户代码文件
@@ -48,40 +66,11 @@ public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements Co
      */
     @Override
     public List<ExecuteMessage> executeFile(File userCodeFile, List<String> inputList) {
-        // 拿到编译好的 main.class所在目录
         String userCodeParentPath = userCodeFile.getParentFile().getAbsolutePath();
-        // 获取一个所有参数都是默认值的docker client
-        // 也就是创建一个docker的客户端
         DockerClient dockerClient = DockerClientBuilder.getInstance().build();
 
-        // 1)拉取镜像
-        String image="openjdk:8-alpine";
-        if(FIRST_INIT){
-            // 执行拉取镜像的命令
-            PullImageCmd pullImageCmd =dockerClient.pullImageCmd(image);
-            // 回调函数，每下载完一块就打印进度
-            PullImageResultCallback pullImageResultCallback =new PullImageResultCallback(){
-                @Override
-                public void onNext(PullResponseItem item){
-                    System.out.println("下载的镜像： "+ item.getStatus());
-                    super.onNext(item);
-                }
-
-            };
-            try {
-                pullImageCmd
-                        .exec(pullImageResultCallback)
-                        .awaitCompletion();
-            } catch (InterruptedException e) {
-                System.out.println("拉取镜像异常： "+ e.getMessage());
-                throw new RuntimeException(e);
-            }
-        }
-        System.out.println("下载完成");
-
-
-        // 2)创建容器时指定hostconfig，定义容器配置，来限制内存
-        CreateContainerCmd containerCmd =dockerClient.createContainerCmd(image);
+        // 2)创建容器
+        CreateContainerCmd containerCmd = dockerClient.createContainerCmd(IMAGE);
         HostConfig hostConfig=new HostConfig();
         hostConfig.withMemory(100*1000*1000L); //内存上限100mb
         hostConfig.withMemorySwap(0L);         //禁止使用交换内存
@@ -91,13 +80,13 @@ public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements Co
 
         CreateContainerResponse createConfigResponse= containerCmd
                 .withHostConfig(hostConfig)
-                .withNetworkDisabled(true)//禁止网络资源调用
-                .withReadonlyRootfs(true)//禁止向根目录里面写文件
-                .withAttachStdin(true)
-                .withAttachStderr(true)
-                .withAttachStdout(true)
-                .withTty(true)
-                .exec();
+                .withNetworkDisabled(true) //禁止网络资源调用，用户代码不能联网
+                .withReadonlyRootfs(true) //禁止向根目录里面写文件，根目录只读
+                .withAttachStdin(true)    // 附加标准输入
+                .withAttachStderr(true)   // 附加错误输出
+                .withAttachStdout(true)   // 附加标准输出
+                .withTty(true)            // 分配伪终端
+                .exec();                  // 真正创建容器
         System.out.println(createConfigResponse);
         String containerId =createConfigResponse.getId();
 
@@ -118,7 +107,7 @@ public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements Co
             System.out.println("创建执行命令: "+execCreateCmdResponse);
 
             System.out.println("创建执行命令:"+ execCreateCmdResponse);
-            //创建消息值，用于返回执行情况
+            //定义回调，创建消息值，用于返回执行情况
             ExecuteMessage executeMessage = new ExecuteMessage();
             final String[] message = {null};
             final String[] errorMessage = {null};
@@ -191,10 +180,14 @@ public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements Co
             }
             executeMessage.setMessage(message[0]);
             executeMessage.setErrorMessage(errorMessage[0]);
+            executeMessage.setTimeout(timeout[0]);
             executeMessageList.add(executeMessage);
             executeMessage.setTime(time);
             executeMessage.setMemory(maxMemory[0]);
         }
+        // 所有测试用例执行完，停止并删除容器
+        dockerClient.stopContainerCmd(containerId).exec();
+        dockerClient.removeContainerCmd(containerId).exec();
         return executeMessageList;
     }
 

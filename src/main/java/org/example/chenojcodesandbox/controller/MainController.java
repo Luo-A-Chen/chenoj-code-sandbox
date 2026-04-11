@@ -21,6 +21,7 @@ public class MainController {
     @Resource
     private CodeSandbox codeSandbox;
 
+// 安全检查接口
     @GetMapping("/index")
     public String index() {
         return "Hello World!";

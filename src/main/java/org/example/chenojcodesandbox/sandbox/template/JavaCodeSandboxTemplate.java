@@ -39,31 +39,34 @@ public abstract class JavaCodeSandboxTemplate implements CodeSandbox{
      */
     @Override
     public ExecuteCodeResponse executeCode(ExecuteCodeRequest request) {
-        //题目输入用例列表+提交的代码+编程语言
-        List<String> inputList =request.getInputList();
-        String code=request.getCode();
-        String language=request.getLanguage();
+        List<String> inputList = request.getInputList();
+        String code = request.getCode();
+        String language = request.getLanguage();
 
-        //1.把用户代码保存成文件
-        File userCodeFile = CodeSavetoFile(code);
+        try {
+            //1.把用户代码保存成文件
+            File userCodeFile = CodeSavetoFile(code);
 
-        //2.编译代码，得到class文件
-        ExecuteMessage compileFileExecuteMessage = compileFile(userCodeFile);
-        System.out.println(compileFileExecuteMessage);
+            //2.编译代码，得到class文件
+            ExecuteMessage compileFileExecuteMessage = compileFile(userCodeFile);
+            System.out.println(compileFileExecuteMessage);
 
-        //3.执行代码，得到输出结果
-        List<ExecuteMessage> executeMessageList = executeFile(userCodeFile, inputList);
+            //3.执行代码，得到输出结果
+            List<ExecuteMessage> executeMessageList = executeFile(userCodeFile, inputList);
 
-        //4. 收集整理输出结果
-        ExecuteCodeResponse outputResponse = getOutputResponse(executeMessageList);
+            //4. 收集整理输出结果
+            ExecuteCodeResponse outputResponse = getOutputResponse(executeMessageList);
 
-        //5.文件清理，释放空间
-        boolean delete = deleteFile(userCodeFile);
-        if (!delete){
-            log.error("删除文件失败,userCodeFilePath={}", userCodeFile.getAbsolutePath());
+            //5.文件清理，释放空间
+            boolean delete = deleteFile(userCodeFile);
+            if (!delete) {
+                log.error("删除文件失败,userCodeFilePath={}", userCodeFile.getAbsolutePath());
+            }
+            return outputResponse;
+        } catch (Exception e) {
+            log.error("代码沙箱执行异常", e);
+            return getErrorResponse(e);
         }
-        //todo错误处理，提升程序健壮性
-        return outputResponse;
     }
 
     //模板方法实施开发
@@ -153,6 +156,12 @@ public abstract class JavaCodeSandboxTemplate implements CodeSandbox{
         // 取用时最大值，便于判断是否超时
         long maxTime = 0;
         for (ExecuteMessage executeMessage : executeMessageList) {
+            // 超时判断
+            if (Boolean.TRUE.equals(executeMessage.getTimeout())) {
+                executeCodeResponse.setMessage("执行超时");
+                executeCodeResponse.setStatus(4);
+                break;
+            }
             String errorMessage = executeMessage.getErrorMessage();
             if (StrUtil.isNotBlank(errorMessage)) {
                 executeCodeResponse.setMessage(errorMessage);
@@ -198,7 +207,7 @@ public abstract class JavaCodeSandboxTemplate implements CodeSandbox{
      * @param e
      * @return
      */
-    private ExecuteCodeResponse getErrorResponse(Throwable e) {
+    protected ExecuteCodeResponse getErrorResponse(Throwable e) {
         ExecuteCodeResponse executeCodeResponse = new ExecuteCodeResponse();
         executeCodeResponse.setOutputList(new ArrayList<>());
         executeCodeResponse.setMessage(e.getMessage());
