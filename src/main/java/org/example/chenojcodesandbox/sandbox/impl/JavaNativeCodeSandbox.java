@@ -3,8 +3,8 @@ package org.example.chenojcodesandbox;
 import org.example.chenojcodesandbox.model.ExecuteCodeRequest;
 import org.example.chenojcodesandbox.model.ExecuteCodeResponse;
 import org.example.chenojcodesandbox.model.ExecuteMessage;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
-import org.springframework.stereotype.Service;
 
 import java.io.File;
 import java.util.List;

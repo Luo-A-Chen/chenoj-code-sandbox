@@ -1,6 +1,6 @@
 package org.example.chenojcodesandbox.controller;
 
-import org.example.chenojcodesandbox.JavaNativeCodeSandbox;
+import org.example.chenojcodesandbox.CodeSandbox;
 import org.example.chenojcodesandbox.model.ExecuteCodeRequest;
 import org.example.chenojcodesandbox.model.ExecuteCodeResponse;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -15,12 +15,11 @@ import javax.servlet.http.HttpServletResponse;
 @RestController("/")
 public class MainController {
     //定义鉴权请求头和密钥
-    private static final String AUTH_REQUEST_HEADER="auth";
-
-    private static final String AUTH_REQUEST_SECRET="secretKey";
+    private static final String AUTH_REQUEST_HEADER = "auth";
+    private static final String AUTH_REQUEST_SECRET = "secretKey";
 
     @Resource
-    private JavaNativeCodeSandbox javaNativeCodeSandbox;
+    private CodeSandbox codeSandbox;
 
     @GetMapping("/index")
     public String index() {
@@ -28,24 +27,21 @@ public class MainController {
     }
 
     /**
-     *  执行代码开放api接口
-     *  将代码沙箱通过api接口暴露给外界调用
-     * @param executeCodeRequest
-     * @return
+     * 执行代码开放api接口
+     * 将代码沙箱通过api接口暴露给外界调用
      */
     @PostMapping("/executeCode")
     ExecuteCodeResponse executeCode(@RequestBody ExecuteCodeRequest executeCodeRequest,
-                                    HttpServletRequest  request,
-                                    HttpServletResponse  response) {
-        //鉴权
+                                    HttpServletRequest request,
+                                    HttpServletResponse response) {
         String authHeader = request.getHeader(AUTH_REQUEST_HEADER);
-        if(!authHeader.equals(AUTH_REQUEST_SECRET)){
+        if (!authHeader.equals(AUTH_REQUEST_SECRET)) {
             response.setStatus(403);
             return null;
         }
-        if(executeCodeRequest == null){
+        if (executeCodeRequest == null) {
             throw new RuntimeException("参数为空");
         }
-        return javaNativeCodeSandbox.executeCode(executeCodeRequest);
+        return codeSandbox.executeCode(executeCodeRequest);
     }
 }

@@ -30,46 +30,36 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
+import org.springframework.context.annotation.Primary;
+
 @Component
+@Primary
 public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements CodeSandbox{
     // 定义一个守护线程的超时时间
     private static final long TIME_OUT = 10000L;
     // 初始化容器
     private static final Boolean FIRST_INIT=true;
 
-
-    public static void main(String[] args) {
-        JavaDockerCodeSandbox javaNativeCodeSandbox = new JavaDockerCodeSandbox();
-        //1.构造一个代码沙县请求类
-        ExecuteCodeRequest executeCodeRequest = new ExecuteCodeRequest();
-        //2.读取题目输入用例（这里先测试写死）
-        executeCodeRequest.setInputList(Arrays.asList("1 2", "1 3"));
-        //3.读取用户写入代码
-        String code = ResourceUtil.readStr("testCode/simpleComputeArgs/Main.java", StandardCharsets.UTF_8);
-        executeCodeRequest.setCode(code);
-        executeCodeRequest.setLanguage("java");
-        //4.调用沙箱处理，将用户请求编译
-        ExecuteCodeResponse executeCodeResponse = javaNativeCodeSandbox.executeCode(executeCodeRequest);
-        System.out.println(executeCodeResponse);
-    }
-
-
     /**
-     * 3.创建容器执行用户代码文件
+     * 创建docker容器执行用户代码文件
      * @param userCodeFile
      * @param inputList
      * @return
      */
     @Override
     public List<ExecuteMessage> executeFile(File userCodeFile, List<String> inputList) {
+        // 拿到编译好的 main.class所在目录
         String userCodeParentPath = userCodeFile.getParentFile().getAbsolutePath();
         // 获取一个所有参数都是默认值的docker client
+        // 也就是创建一个docker的客户端
         DockerClient dockerClient = DockerClientBuilder.getInstance().build();
 
         // 1)拉取镜像
         String image="openjdk:8-alpine";
         if(FIRST_INIT){
+            // 执行拉取镜像的命令
             PullImageCmd pullImageCmd =dockerClient.pullImageCmd(image);
+            // 回调函数，每下载完一块就打印进度
             PullImageResultCallback pullImageResultCallback =new PullImageResultCallback(){
                 @Override
                 public void onNext(PullResponseItem item){
@@ -93,9 +83,9 @@ public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements Co
         // 2)创建容器时指定hostconfig，定义容器配置，来限制内存
         CreateContainerCmd containerCmd =dockerClient.createContainerCmd(image);
         HostConfig hostConfig=new HostConfig();
-        hostConfig.withMemory(100*1000*1000L);
-        hostConfig.withMemorySwap(0L);//内存交换的值
-        hostConfig.withCpuCount(1L);
+        hostConfig.withMemory(100*1000*1000L); //内存上限100mb
+        hostConfig.withMemorySwap(0L);         //禁止使用交换内存
+        hostConfig.withCpuCount(1L);           //只使用一个cpu核心
         hostConfig.setBinds(new Bind(userCodeParentPath,new Volume("/app")));
         //todo hostConfig.withSecurityOpts(Array.asList("seccomp=网上搜docker安全管理配置字符串"));
 
