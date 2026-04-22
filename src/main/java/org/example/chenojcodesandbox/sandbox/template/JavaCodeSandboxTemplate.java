@@ -1,4 +1,4 @@
-package org.example.chenojcodesandbox;
+package org.example.chenojcodesandbox.sandbox.template;
 
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
@@ -7,6 +7,7 @@ import org.example.chenojcodesandbox.model.ExecuteCodeRequest;
 import org.example.chenojcodesandbox.model.ExecuteCodeResponse;
 import org.example.chenojcodesandbox.model.ExecuteMessage;
 import org.example.chenojcodesandbox.model.JudgeInfo;
+import org.example.chenojcodesandbox.sandbox.CodeSandbox;
 import org.example.chenojcodesandbox.utils.ProcessUtils;
 
 import java.io.File;
@@ -21,7 +22,7 @@ import java.util.UUID;
  * Template模版，沙箱模板
  */
 @Slf4j
-public abstract class JavaCodeSandboxTemplate implements CodeSandbox{
+public abstract class JavaCodeSandboxTemplate implements CodeSandbox {
     // 全局代码存放的目录，写死了但是设置全局变量，防止魔法值
     private static final String GLOBAL_CODE_DIR_NAME = "tempCode";
     // 全局代码文件名,执行的代码只能运行在该目录下，减少读取用户输入的类名
@@ -101,12 +102,16 @@ public abstract class JavaCodeSandboxTemplate implements CodeSandbox{
      * @param userCodefile
      */
     public ExecuteMessage compileFile(File  userCodefile){
-        String compileCmd = String.format("javac -encoding utf-8 %s", userCodefile.getAbsolutePath());
+        // 与 Docker 内 JRE8 一致。宿主机若为 JDK11+，默认会编出高版本 class，容器里 JRE8 在 loadClass 阶段失败
+        String compileCmd = String.format("javac -encoding utf-8 -source 1.8 -target 1.8 %s", userCodefile.getAbsolutePath());
         try {
             Process compileProcess =Runtime.getRuntime().exec(compileCmd);
             ExecuteMessage executeMessage = ProcessUtils.runProcessAndGetMessage(compileProcess, "编译");
-            if(executeMessage.getExitValue()!=0){
-                throw new RuntimeException("编译错误");
+            if (executeMessage.getExitValue() != 0) {
+                String detail = StrUtil.blankToDefault(executeMessage.getErrorMessage(),
+                        StrUtil.nullToEmpty(executeMessage.getMessage()));
+                detail = StrUtil.trim(detail);
+                throw new RuntimeException(StrUtil.isBlank(detail) ? "编译错误" : "编译错误: " + detail);
             }
             return executeMessage;
         } catch (Exception e) {

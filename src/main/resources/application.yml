@@ -1,2 +1,4 @@
-server.port:
-  8090
+server:
+  port: 8090
+  # WSL 内默认只绑 127.0.0.1 时，Windows 上 OJ 访问 localhost:8090 可能转发不到；绑 0.0.0.0 后可用 WSL 的 IP 访问
+  address: 0.0.0.0

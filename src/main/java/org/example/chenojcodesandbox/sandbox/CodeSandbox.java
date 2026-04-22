@@ -1,4 +1,4 @@
-package org.example.chenojcodesandbox;
+package org.example.chenojcodesandbox.sandbox;
 
 
 import org.example.chenojcodesandbox.model.ExecuteCodeRequest;

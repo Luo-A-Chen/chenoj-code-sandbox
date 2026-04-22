@@ -1,4 +1,4 @@
-package org.example.chenojcodesandbox.security;
+package org.example.chenojcodesandbox.sandbox.security;
 
 import java.security.Permission;
 

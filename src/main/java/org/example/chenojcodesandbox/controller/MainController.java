@@ -1,18 +1,21 @@
 package org.example.chenojcodesandbox.controller;
 
-import org.example.chenojcodesandbox.CodeSandbox;
 import org.example.chenojcodesandbox.model.ExecuteCodeRequest;
 import org.example.chenojcodesandbox.model.ExecuteCodeResponse;
+import org.example.chenojcodesandbox.sandbox.CodeSandbox;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
+import lombok.extern.slf4j.Slf4j;
+
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
-@RestController("/")
+@Slf4j
+@RestController("codeSandboxApiController")
 public class MainController {
     //定义鉴权请求头和密钥
     private static final String AUTH_REQUEST_HEADER = "auth";
@@ -35,8 +38,10 @@ public class MainController {
     ExecuteCodeResponse executeCode(@RequestBody ExecuteCodeRequest executeCodeRequest,
                                     HttpServletRequest request,
                                     HttpServletResponse response) {
+        log.info("收到 POST /executeCode, RemoteAddr={}", request.getRemoteAddr());
         String authHeader = request.getHeader(AUTH_REQUEST_HEADER);
-        if (!authHeader.equals(AUTH_REQUEST_SECRET)) {
+        if (!AUTH_REQUEST_SECRET.equals(authHeader)) {
+            log.warn("鉴权失败: 期望 header[{}]=[{}], 实际=[{}]", AUTH_REQUEST_HEADER, AUTH_REQUEST_SECRET, authHeader);
             response.setStatus(403);
             return null;
         }

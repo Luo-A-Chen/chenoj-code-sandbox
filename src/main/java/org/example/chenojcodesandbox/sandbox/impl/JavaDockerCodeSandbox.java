@@ -1,23 +1,15 @@
-package org.example.chenojcodesandbox;
+package org.example.chenojcodesandbox.sandbox.impl;
 import cn.hutool.core.date.StopWatch;
-import cn.hutool.core.io.FileUtil;
-import cn.hutool.core.io.resource.ResourceUtil;
 import cn.hutool.core.util.ArrayUtil;
-import cn.hutool.core.util.StrUtil;
-import cn.hutool.dfa.FoundWord;
-import cn.hutool.dfa.WordTree;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.async.ResultCallback;
 import com.github.dockerjava.api.command.*;
 import com.github.dockerjava.api.model.*;
 import com.github.dockerjava.core.DockerClientBuilder;
 import com.github.dockerjava.core.command.ExecStartResultCallback;
-import org.example.chenojcodesandbox.model.ExecuteCodeRequest;
-import org.example.chenojcodesandbox.model.ExecuteCodeResponse;
 import org.example.chenojcodesandbox.model.ExecuteMessage;
-import org.example.chenojcodesandbox.model.JudgeInfo;
-import org.example.chenojcodesandbox.security.DefaultSecurityManager;
-import org.example.chenojcodesandbox.utils.ProcessUtils;
+import org.example.chenojcodesandbox.sandbox.CodeSandbox;
+import org.example.chenojcodesandbox.sandbox.template.JavaCodeSandboxTemplate;
 import org.springframework.stereotype.Component;
 
 import java.io.Closeable;
@@ -25,7 +17,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -34,27 +26,43 @@ import org.springframework.context.annotation.Primary;
 
 @Component
 @Primary
-public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements CodeSandbox{
+public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements CodeSandbox {
     private static final long TIME_OUT = 10000L;
-    private static final String IMAGE = "openjdk:8-alpine";
+    /** Docker Hub 已下线 openjdk:* 官方镜像，改用 Eclipse Temurin；容器内只跑 java，用 jre 即可 */
+    private static final String IMAGE = "eclipse-temurin:8-jre-alpine";
 
-    // 静态初始化块，类加载时只执行一次，确保镜像只拉取一次
-    static {
-        DockerClient dockerClient = DockerClientBuilder.getInstance().build();
-        PullImageResultCallback pullImageResultCallback = new PullImageResultCallback() {
-            @Override
-            public void onNext(PullResponseItem item) {
-                System.out.println("下载的镜像：" + item.getStatus());
-                super.onNext(item);
+    /**
+     * 首次执行沙箱时再拉镜像。静态块会在 Spring 创建 Bean、类一加载就连 Docker，
+     * Docker 未启动或 DOCKER_HOST 错误会导致整个应用启动失败。
+     */
+    private volatile boolean imagePrepared;
+
+    private void ensureDockerImage() {
+        if (imagePrepared) {
+            return;
+        }
+        synchronized (this) {
+            if (imagePrepared) {
+                return;
             }
-        };
-        try {
-            dockerClient.pullImageCmd(IMAGE)
-                    .exec(pullImageResultCallback)
-                    .awaitCompletion();
-            System.out.println("镜像拉取完成");
-        } catch (InterruptedException e) {
-            throw new RuntimeException("镜像拉取失败", e);
+            DockerClient dockerClient = DockerClientBuilder.getInstance().build();
+            PullImageResultCallback pullImageResultCallback = new PullImageResultCallback() {
+                @Override
+                public void onNext(PullResponseItem item) {
+                    System.out.println("下载的镜像：" + item.getStatus());
+                    super.onNext(item);
+                }
+            };
+            try {
+                dockerClient.pullImageCmd(IMAGE)
+                        .exec(pullImageResultCallback)
+                        .awaitCompletion();
+                System.out.println("镜像拉取完成");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("镜像拉取被中断", e);
+            }
+            imagePrepared = true;
         }
     }
 
@@ -66,20 +74,26 @@ public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements Co
      */
     @Override
     public List<ExecuteMessage> executeFile(File userCodeFile, List<String> inputList) {
+        ensureDockerImage();
         String userCodeParentPath = userCodeFile.getParentFile().getAbsolutePath();
         DockerClient dockerClient = DockerClientBuilder.getInstance().build();
 
         // 2)创建容器
         CreateContainerCmd containerCmd = dockerClient.createContainerCmd(IMAGE);
-        HostConfig hostConfig=new HostConfig();
-        hostConfig.withMemory(100*1000*1000L); //内存上限100mb
-        hostConfig.withMemorySwap(0L);         //禁止使用交换内存
-        hostConfig.withCpuCount(1L);           //只使用一个cpu核心
-        hostConfig.setBinds(new Bind(userCodeParentPath,new Volume("/app")));
+        // HostConfig 为流式/不可变风格，需链上返回对象，避免 withMemory 等不生效
+        HostConfig hostConfig = new HostConfig()
+                .withMemory(100 * 1000 * 1000L) // 内存上限 100mb
+                .withMemorySwap(0L)             // 禁止使用交换内存
+                .withCpuCount(1L)               // 只使用一个 cpu 核心
+                .withBinds(new Bind(userCodeParentPath, new Volume("/app")))
+                // 只读根下 /tmp 不可写，JVM 需可写 java.io.tmpdir
+                .withTmpFs(Collections.singletonMap("/tmp", "rw,exec"));
         //todo hostConfig.withSecurityOpts(Array.asList("seccomp=网上搜docker安全管理配置字符串"));
 
+        // 镜像默认 ENTRYPOINT 会立即退出，容器停了再 docker exec 会 409。用常驻进程占位，真正判题在 exec 里跑 java
         CreateContainerResponse createConfigResponse= containerCmd
                 .withHostConfig(hostConfig)
+                .withEntrypoint("tail", "-f", "/dev/null")
                 .withNetworkDisabled(true) //禁止网络资源调用，用户代码不能联网
                 .withReadonlyRootfs(true) //禁止向根目录里面写文件，根目录只读
                 .withAttachStdin(true)    // 附加标准输入

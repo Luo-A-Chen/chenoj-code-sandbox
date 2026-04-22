@@ -1,9 +1,9 @@
-package org.example.chenojcodesandbox;
+package org.example.chenojcodesandbox.sandbox.impl;
 
 import org.example.chenojcodesandbox.model.ExecuteCodeRequest;
 import org.example.chenojcodesandbox.model.ExecuteCodeResponse;
 import org.example.chenojcodesandbox.model.ExecuteMessage;
-import org.springframework.context.annotation.Primary;
+import org.example.chenojcodesandbox.sandbox.template.JavaCodeSandboxTemplate;
 import org.springframework.stereotype.Component;
 
 import java.io.File;

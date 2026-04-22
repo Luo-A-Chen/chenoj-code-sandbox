@@ -45,25 +45,24 @@ public class ProcessUtils {
             } else {
                 System.out.println(opName + "失败，错误码：" + exitState);
                 BufferedReader bufferReader = new BufferedReader(new InputStreamReader(runProcess.getInputStream()));
-                //再把结果拼起来
-                List<String> outputStrList =new ArrayList<>();
-                //逐行读取输出
+                List<String> outputStrList = new ArrayList<>();
                 String compileOutputLine;
                 while ((compileOutputLine = bufferReader.readLine()) != null) {
                     outputStrList.add(compileOutputLine);
                 }
-                executeMessage.setMessage(StringUtils.join(outputStrList,"\n"));
-                System.out.println("编译信息 " + outputStrList);
+                executeMessage.setMessage(StringUtils.join(outputStrList, "\n"));
 
                 BufferedReader errorBufferReader = new BufferedReader(new InputStreamReader(runProcess.getErrorStream()));
-                List<String> errorOutputStrList =new ArrayList<>();
-                //逐行读取输出
+                List<String> errorOutputStrList = new ArrayList<>();
                 String errorCompileOutputLine;
                 while ((errorCompileOutputLine = errorBufferReader.readLine()) != null) {
                     errorOutputStrList.add(errorCompileOutputLine);
                 }
-                executeMessage.setMessage(StringUtils.join(outputStrList,"\n"));
-                System.out.println("编译信息 " + outputStrList);
+                String errText = StringUtils.join(errorOutputStrList, "\n");
+                // javac 等工具把报错写在 stderr，原先未写入 errorMessage，日志里永远是 []
+                executeMessage.setErrorMessage(errText);
+                System.out.println(opName + " stdout: " + outputStrList);
+                System.out.println(opName + " stderr: " + errorOutputStrList);
             }
             //结束时间
             stopWatch.stop();
