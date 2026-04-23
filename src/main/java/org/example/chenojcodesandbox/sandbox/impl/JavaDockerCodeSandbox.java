@@ -28,6 +28,14 @@ import org.springframework.context.annotation.Primary;
 @Primary
 public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements CodeSandbox {
     private static final long TIME_OUT = 10000L;
+
+    /** TTY 下 println 会在 payload 末尾带 \\r\\n；与本地 ProcessUtils.readLine 行为对齐（Java8 兼容）。 */
+    private static String normalizeProcessOutput(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        return raw.replaceFirst("\\s+$", "");
+    }
     /** Docker Hub 已下线 openjdk:* 官方镜像，改用 Eclipse Temurin；容器内只跑 java，用 jre 即可 */
     private static final String IMAGE = "eclipse-temurin:8-jre-alpine";
 
@@ -123,8 +131,8 @@ public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements Co
             System.out.println("创建执行命令:"+ execCreateCmdResponse);
             //定义回调，创建消息值，用于返回执行情况
             ExecuteMessage executeMessage = new ExecuteMessage();
-            final String[] message = {null};
-            final String[] errorMessage = {null};
+            final StringBuilder stdout = new StringBuilder();
+            final StringBuilder stderr = new StringBuilder();
             long time =0L;
             final boolean[] timeout ={true};//默认程序执行是超时的
             String execId = execCreateCmdResponse.getId();
@@ -139,12 +147,13 @@ public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements Co
                 @Override
                 public void onNext(Frame frame){
                     StreamType streamType=frame.getStreamType();
+                    String chunk = new String(frame.getPayload(), StandardCharsets.UTF_8);
                     if(StreamType.STDERR.equals(streamType)){
-                        errorMessage[0] =new String(frame.getPayload());
-                        System.out.println("输出错误结果: "+ errorMessage[0]);
+                        stderr.append(chunk);
+                        System.out.println("输出错误结果: "+ chunk);
                     } else{
-                        message[0]=new String(frame.getPayload());
-                        System.out.println("输出结果: "+message[0]);
+                        stdout.append(chunk);
+                        System.out.println("输出结果: "+ chunk);
                     }
                     super.onNext(frame);
                 }
@@ -192,8 +201,8 @@ public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements Co
                 System.out.println("错误输出结果: "+e.getMessage());
                 throw new  RuntimeException(e);
             }
-            executeMessage.setMessage(message[0]);
-            executeMessage.setErrorMessage(errorMessage[0]);
+            executeMessage.setMessage(normalizeProcessOutput(stdout.toString()));
+            executeMessage.setErrorMessage(normalizeProcessOutput(stderr.toString()));
             executeMessage.setTimeout(timeout[0]);
             executeMessageList.add(executeMessage);
             executeMessage.setTime(time);

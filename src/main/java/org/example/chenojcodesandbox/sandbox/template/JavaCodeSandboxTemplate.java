@@ -44,9 +44,10 @@ public abstract class JavaCodeSandboxTemplate implements CodeSandbox {
         String code = request.getCode();
         String language = request.getLanguage();
 
+        File userCodeFile = null;
         try {
             //1.把用户代码保存成文件
-            File userCodeFile = CodeSavetoFile(code);
+            userCodeFile = CodeSavetoFile(code);
 
             //2.编译代码，得到class文件
             ExecuteMessage compileFileExecuteMessage = compileFile(userCodeFile);
@@ -56,17 +57,18 @@ public abstract class JavaCodeSandboxTemplate implements CodeSandbox {
             List<ExecuteMessage> executeMessageList = executeFile(userCodeFile, inputList);
 
             //4. 收集整理输出结果
-            ExecuteCodeResponse outputResponse = getOutputResponse(executeMessageList);
-
-            //5.文件清理，释放空间
-            boolean delete = deleteFile(userCodeFile);
-            if (!delete) {
-                log.error("删除文件失败,userCodeFilePath={}", userCodeFile.getAbsolutePath());
-            }
-            return outputResponse;
+            return getOutputResponse(executeMessageList);
         } catch (Exception e) {
             log.error("代码沙箱执行异常", e);
             return getErrorResponse(e);
+        } finally {
+            // 编译失败、运行异常时原先不会走删除逻辑，tempCode 下会堆积 UUID/Main.java；统一在 finally 清理
+            if (userCodeFile != null) {
+                boolean delete = deleteFile(userCodeFile);
+                if (!delete) {
+                    log.error("删除文件失败,userCodeFilePath={}", userCodeFile.getAbsolutePath());
+                }
+            }
         }
     }
 
