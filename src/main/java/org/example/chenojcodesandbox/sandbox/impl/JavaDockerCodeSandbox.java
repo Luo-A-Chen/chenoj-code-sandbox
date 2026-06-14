@@ -1,6 +1,6 @@
 package org.example.chenojcodesandbox.sandbox.impl;
+
 import cn.hutool.core.date.StopWatch;
-import cn.hutool.core.util.ArrayUtil;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.async.ResultCallback;
 import com.github.dockerjava.api.command.*;
@@ -8,8 +8,12 @@ import com.github.dockerjava.api.model.*;
 import com.github.dockerjava.core.DockerClientBuilder;
 import com.github.dockerjava.core.command.ExecStartResultCallback;
 import org.example.chenojcodesandbox.model.ExecuteMessage;
+import org.example.chenojcodesandbox.model.JudgeConfig;
 import org.example.chenojcodesandbox.sandbox.CodeSandbox;
+import org.example.chenojcodesandbox.sandbox.SandboxLimits;
 import org.example.chenojcodesandbox.sandbox.template.JavaCodeSandboxTemplate;
+import org.example.chenojcodesandbox.utils.SandboxStdinSupport;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.io.Closeable;
@@ -19,30 +23,21 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-
-import org.springframework.context.annotation.Primary;
 
 @Component
 @Primary
 public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements CodeSandbox {
-    private static final long TIME_OUT = 10000L;
 
-    /** TTY 下 println 会在 payload 末尾带 \\r\\n；与本地 ProcessUtils.readLine 行为对齐（Java8 兼容）。 */
+    private static final String IMAGE = "eclipse-temurin:8-jre-alpine";
+
     private static String normalizeProcessOutput(String raw) {
         if (raw == null) {
             return null;
         }
         return raw.replaceFirst("\\s+$", "");
     }
-    /** Docker Hub 已下线 openjdk:* 官方镜像，改用 Eclipse Temurin；容器内只跑 java，用 jre 即可 */
-    private static final String IMAGE = "eclipse-temurin:8-jre-alpine";
 
-    /**
-     * 首次执行沙箱时再拉镜像。静态块会在 Spring 创建 Bean、类一加载就连 Docker，
-     * Docker 未启动或 DOCKER_HOST 错误会导致整个应用启动失败。
-     */
     private volatile boolean imagePrepared;
 
     private void ensureDockerImage() {
@@ -74,144 +69,134 @@ public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate implements Co
         }
     }
 
-    /**
-     * 创建docker容器执行用户代码文件
-     * @param userCodeFile
-     * @param inputList
-     * @return
-     */
     @Override
-    public List<ExecuteMessage> executeFile(File userCodeFile, List<String> inputList) {
+    public List<ExecuteMessage> executeFile(File userCodeFile, List<String> inputList, JudgeConfig judgeConfig) {
         ensureDockerImage();
-        String userCodeParentPath = userCodeFile.getParentFile().getAbsolutePath();
+        long execTimeoutMs = SandboxLimits.effectiveTimeMs(judgeConfig);
+        long containerMemoryBytes = SandboxLimits.effectiveMemoryBytes(judgeConfig);
+
+        File workDir = userCodeFile.getParentFile();
+        String userCodeParentPath = workDir.getAbsolutePath();
         DockerClient dockerClient = DockerClientBuilder.getInstance().build();
 
-        // 2)创建容器
-        CreateContainerCmd containerCmd = dockerClient.createContainerCmd(IMAGE);
-        // HostConfig 为流式/不可变风格，需链上返回对象，避免 withMemory 等不生效
         HostConfig hostConfig = new HostConfig()
-                .withMemory(100 * 1000 * 1000L) // 内存上限 100mb
-                .withMemorySwap(0L)             // 禁止使用交换内存
-                .withCpuCount(1L)               // 只使用一个 cpu 核心
+                .withMemory(containerMemoryBytes)
+                .withMemorySwap(0L)
+                .withCpuCount(1L)
                 .withBinds(new Bind(userCodeParentPath, new Volume("/app")))
-                // 只读根下 /tmp 不可写，JVM 需可写 java.io.tmpdir
                 .withTmpFs(Collections.singletonMap("/tmp", "rw,exec"));
-        //todo hostConfig.withSecurityOpts(Array.asList("seccomp=网上搜docker安全管理配置字符串"));
 
-        // 镜像默认 ENTRYPOINT 会立即退出，容器停了再 docker exec 会 409。用常驻进程占位，真正判题在 exec 里跑 java
-        CreateContainerResponse createConfigResponse= containerCmd
+        CreateContainerResponse createConfigResponse = dockerClient.createContainerCmd(IMAGE)
                 .withHostConfig(hostConfig)
                 .withEntrypoint("tail", "-f", "/dev/null")
-                .withNetworkDisabled(true) //禁止网络资源调用，用户代码不能联网
-                .withReadonlyRootfs(true) //禁止向根目录里面写文件，根目录只读
-                .withAttachStdin(true)    // 附加标准输入
-                .withAttachStderr(true)   // 附加错误输出
-                .withAttachStdout(true)   // 附加标准输出
-                .withTty(true)            // 分配伪终端
-                .exec();                  // 真正创建容器
-        System.out.println(createConfigResponse);
-        String containerId =createConfigResponse.getId();
+                .withNetworkDisabled(true)
+                .withReadonlyRootfs(true)
+                .withAttachStderr(true)
+                .withAttachStdout(true)
+                .withTty(true)
+                .exec();
+        String containerId = createConfigResponse.getId();
 
-        //3)启动容器
         dockerClient.startContainerCmd(containerId).exec();
         List<ExecuteMessage> executeMessageList = new ArrayList<>();
 
-        for(String inputArgs :inputList){
-            StopWatch  stopWatch = new StopWatch();
-            String[] inputArgsArray=inputArgs.split(" ");
-            String[] cmdArray = ArrayUtil.append(new String[]{"java","-cp","/app","Main"},inputArgsArray);
-            ExecCreateCmdResponse execCreateCmdResponse=dockerClient.execCreateCmd(containerId)
-                    .withCmd(cmdArray)
-                    .withAttachStderr(true)
-                    .withAttachStdin(true)
-                    .withAttachStdout(true)
-                    .exec();
-            System.out.println("创建执行命令: "+execCreateCmdResponse);
+        String stdinRedirectCmd = String.format(
+                "java -Dfile.encoding=UTF-8 -cp /app Main < /app/%s",
+                SandboxStdinSupport.STDIN_FILE_NAME);
 
-            System.out.println("创建执行命令:"+ execCreateCmdResponse);
-            //定义回调，创建消息值，用于返回执行情况
-            ExecuteMessage executeMessage = new ExecuteMessage();
-            final StringBuilder stdout = new StringBuilder();
-            final StringBuilder stderr = new StringBuilder();
-            long time =0L;
-            final boolean[] timeout ={true};//默认程序执行是超时的
-            String execId = execCreateCmdResponse.getId();
+        try {
+            for (String inputContent : inputList) {
+                SandboxStdinSupport.writeStdinFile(workDir, inputContent);
 
-            ExecStartResultCallback execStartResultCallback =new ExecStartResultCallback(){
-                @Override
-                public void onComplete(){
-                    timeout[0]=false;//执行成功了以后又设置成不超时的
-                    super.onComplete();
-                }
+                StopWatch stopWatch = new StopWatch();
+                ExecCreateCmdResponse execCreateCmdResponse = dockerClient.execCreateCmd(containerId)
+                        .withCmd("sh", "-c", stdinRedirectCmd)
+                        .withAttachStderr(true)
+                        .withAttachStdout(true)
+                        .withAttachStdin(false)
+                        .exec();
 
-                @Override
-                public void onNext(Frame frame){
-                    StreamType streamType=frame.getStreamType();
-                    String chunk = new String(frame.getPayload(), StandardCharsets.UTF_8);
-                    if(StreamType.STDERR.equals(streamType)){
-                        stderr.append(chunk);
-                        System.out.println("输出错误结果: "+ chunk);
-                    } else{
-                        stdout.append(chunk);
-                        System.out.println("输出结果: "+ chunk);
+                ExecuteMessage executeMessage = new ExecuteMessage();
+                final StringBuilder stdout = new StringBuilder();
+                final StringBuilder stderr = new StringBuilder();
+                long time = 0L;
+                final boolean[] timeout = {true};
+                String execId = execCreateCmdResponse.getId();
+
+                ExecStartResultCallback execStartResultCallback = new ExecStartResultCallback() {
+                    @Override
+                    public void onComplete() {
+                        timeout[0] = false;
+                        super.onComplete();
                     }
-                    super.onNext(frame);
+
+                    @Override
+                    public void onNext(Frame frame) {
+                        StreamType streamType = frame.getStreamType();
+                        String chunk = new String(frame.getPayload(), StandardCharsets.UTF_8);
+                        if (StreamType.STDERR.equals(streamType)) {
+                            stderr.append(chunk);
+                        } else {
+                            stdout.append(chunk);
+                        }
+                        super.onNext(frame);
+                    }
+                };
+
+                final long[] maxMemoryBytes = {0L};
+                StatsCmd statsCmd = dockerClient.statsCmd(containerId);
+                ResultCallback<Statistics> statisticsResultCallback = statsCmd.exec(new ResultCallback<Statistics>() {
+                    @Override
+                    public void onStart(Closeable closeable) {
+                    }
+
+                    @Override
+                    public void onNext(Statistics statistics) {
+                        Long usage = statistics.getMemoryStats().getUsage();
+                        if (usage != null) {
+                            maxMemoryBytes[0] = Math.max(maxMemoryBytes[0], usage);
+                        }
+                    }
+
+                    @Override
+                    public void onError(Throwable throwable) {
+                    }
+
+                    @Override
+                    public void onComplete() {
+                    }
+
+                    @Override
+                    public void close() throws IOException {
+                    }
+                });
+
+                try {
+                    stopWatch.start();
+                    dockerClient.execStartCmd(execId)
+                            .exec(execStartResultCallback)
+                            .awaitCompletion(execTimeoutMs, TimeUnit.MILLISECONDS);
+                    stopWatch.stop();
+                    time = stopWatch.getLastTaskTimeMillis();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException(e);
+                } finally {
+                    statsCmd.close();
                 }
-            };
 
-            //定义一个最大内存
-            final long[] maxMemory={0L};
-
-            //获取占用的内存
-            StatsCmd statsCmd = dockerClient.statsCmd(containerId);
-            ResultCallback<Statistics> statisticsResultCallback = statsCmd.exec(new ResultCallback<Statistics>() {
-                @Override
-                public void onStart(Closeable closeable) {
-                }
-
-                @Override
-                public void onNext(Statistics statistics) {
-                    System.out.println("内存占用: " + statistics.getMemoryStats().getUsage());
-                    maxMemory[0] =Math.max(statistics.getMemoryStats().getUsage(),maxMemory[0]);
-                }
-
-                @Override
-                public void onError(Throwable throwable) {
-                }
-
-                @Override
-                public void onComplete() {
-                }
-
-                @Override
-                public void close() throws IOException {
-
-                }
-            });
-
-            try{
-                stopWatch.start();
-                dockerClient.execStartCmd(execId)
-                        .exec(execStartResultCallback)
-                        .awaitCompletion(TIME_OUT, TimeUnit.MILLISECONDS);//容器运行超过5秒往下走
-                stopWatch.stop();
-                time = stopWatch.getLastTaskTimeMillis();
-                statsCmd.close();
-            }catch(InterruptedException e){
-                System.out.println("错误输出结果: "+e.getMessage());
-                throw new  RuntimeException(e);
+                executeMessage.setMessage(normalizeProcessOutput(stdout.toString()));
+                executeMessage.setErrorMessage(normalizeProcessOutput(stderr.toString()));
+                executeMessage.setTimeout(timeout[0]);
+                executeMessage.setTime(time);
+                executeMessage.setMemory(SandboxLimits.bytesToKb(maxMemoryBytes[0]));
+                executeMessageList.add(executeMessage);
             }
-            executeMessage.setMessage(normalizeProcessOutput(stdout.toString()));
-            executeMessage.setErrorMessage(normalizeProcessOutput(stderr.toString()));
-            executeMessage.setTimeout(timeout[0]);
-            executeMessageList.add(executeMessage);
-            executeMessage.setTime(time);
-            executeMessage.setMemory(maxMemory[0]);
+        } finally {
+            SandboxStdinSupport.deleteStdinFile(workDir);
+            dockerClient.stopContainerCmd(containerId).exec();
+            dockerClient.removeContainerCmd(containerId).exec();
         }
-        // 所有测试用例执行完，停止并删除容器
-        dockerClient.stopContainerCmd(containerId).exec();
-        dockerClient.removeContainerCmd(containerId).exec();
         return executeMessageList;
     }
-
 }

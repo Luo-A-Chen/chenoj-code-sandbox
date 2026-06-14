@@ -1,42 +1,67 @@
 package org.example.chenojcodesandbox.sandbox.impl;
 
-import org.example.chenojcodesandbox.model.ExecuteCodeRequest;
-import org.example.chenojcodesandbox.model.ExecuteCodeResponse;
 import org.example.chenojcodesandbox.model.ExecuteMessage;
+import org.example.chenojcodesandbox.model.JudgeConfig;
+import org.example.chenojcodesandbox.sandbox.SandboxLimits;
 import org.example.chenojcodesandbox.sandbox.template.JavaCodeSandboxTemplate;
+import org.example.chenojcodesandbox.utils.ProcessUtils;
+import org.example.chenojcodesandbox.utils.SandboxStdinSupport;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 
-
 /**
- * Java原生代码沙箱实现（直接复用模板方法）
+ * Java 原生沙箱：标准输入喂用例，与 Docker 判题方式一致。
  */
 @Component
 public class JavaNativeCodeSandbox extends JavaCodeSandboxTemplate {
-    @Override
-    public ExecuteCodeResponse executeCode(ExecuteCodeRequest request) {
-        return super.executeCode(request);
-    }
 
     @Override
-    public File CodeSavetoFile(String code) {
-        return super.CodeSavetoFile(code);
-    }
+    public List<ExecuteMessage> executeFile(File userCodeFile, List<String> inputList, JudgeConfig judgeConfig) {
+        long execTimeoutMs = SandboxLimits.effectiveTimeMs(judgeConfig);
+        int heapMb = SandboxLimits.effectiveNativeHeapMb(judgeConfig);
+        File workDir = userCodeFile.getParentFile();
 
-    @Override
-    public ExecuteMessage compileFile(File userCodefile) {
-        return super.compileFile(userCodefile);
-    }
+        List<ExecuteMessage> executeMessageList = new ArrayList<>();
+        for (String inputContent : inputList) {
+            try {
+                ProcessBuilder processBuilder = new ProcessBuilder(
+                        "java",
+                        "-Xmx" + heapMb + "m",
+                        "-Dfile.encoding=UTF-8",
+                        "-cp",
+                        workDir.getAbsolutePath(),
+                        "Main");
+                processBuilder.directory(workDir);
+                processBuilder.redirectErrorStream(false);
+                Process runProcess = processBuilder.start();
 
-    @Override
-    public List<ExecuteMessage> executeFile(File userCodeFile, List<String> inputList) {
-        return super.executeFile(userCodeFile, inputList);
-    }
+                Thread watchdog = new Thread(() -> {
+                    try {
+                        Thread.sleep(execTimeoutMs);
+                        runProcess.destroy();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+                watchdog.setDaemon(true);
+                watchdog.start();
 
-    @Override
-    public boolean deleteFile(File userCodeFile) {
-        return super.deleteFile(userCodeFile);
+                SandboxStdinSupport.feedStdin(runProcess, inputContent);
+                ExecuteMessage executeMessage = ProcessUtils.runProcessAndGetMessage(runProcess, "运行");
+                watchdog.interrupt();
+
+                if (executeMessage.getTime() != null && executeMessage.getTime() > execTimeoutMs) {
+                    executeMessage.setTimeout(true);
+                }
+                executeMessageList.add(executeMessage);
+            } catch (IOException e) {
+                throw new RuntimeException("执行错误: " + e.getMessage(), e);
+            }
+        }
+        return executeMessageList;
     }
 }
